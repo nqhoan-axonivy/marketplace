@@ -1,14 +1,15 @@
 package com.axonivy.market.controller;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
-
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
+import com.axonivy.market.assembler.ProductModelAssembler;
+import com.axonivy.market.entity.Product;
+import com.axonivy.market.enums.ErrorCode;
+import com.axonivy.market.enums.Language;
+import com.axonivy.market.enums.SortOption;
+import com.axonivy.market.enums.TypeOption;
+import com.axonivy.market.exceptions.model.UnauthorizedException;
+import com.axonivy.market.github.service.GitHubService;
+import com.axonivy.market.model.ProductCustomSortRequest;
+import com.axonivy.market.service.ProductService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,14 +26,19 @@ import org.springframework.hateoas.PagedModel;
 import org.springframework.hateoas.PagedModel.PageMetadata;
 import org.springframework.http.HttpStatus;
 
-import com.axonivy.market.assembler.ProductModelAssembler;
-import com.axonivy.market.entity.Product;
-import com.axonivy.market.enums.ErrorCode;
-import com.axonivy.market.enums.Language;
-import com.axonivy.market.enums.SortOption;
-import com.axonivy.market.enums.TypeOption;
-import com.axonivy.market.model.ProductRating;
-import com.axonivy.market.service.ProductService;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class ProductControllerTest {
@@ -40,6 +46,8 @@ class ProductControllerTest {
   private static final String PRODUCT_NAME_DE_SAMPLE = "Amazon Comprehend DE";
   private static final String PRODUCT_DESC_SAMPLE = "Amazon Comprehend is a AI service that uses machine learning to uncover information in unstructured data.";
   private static final String PRODUCT_DESC_DE_SAMPLE = "Amazon Comprehend is a AI service that uses machine learning to uncover information in unstructured data. DE";
+  private static final String AUTHORIZATION_HEADER = "Bearer valid_token";
+  private static final String INVALID_AUTHORIZATION_HEADER = "Bearer invalid_token";
 
   @Mock
   private ProductService service;
@@ -51,7 +59,7 @@ class ProductControllerTest {
   private PagedResourcesAssembler<Product> pagedResourcesAssembler;
 
   @Mock
-  private PagedModel<?> pagedProductModel;
+  private GitHubService gitHubService;
 
   @InjectMocks
   private ProductController productController;
@@ -64,13 +72,13 @@ class ProductControllerTest {
   @Test
   void testFindProductsAsEmpty() {
     PageRequest pageable = PageRequest.of(0, 20);
-    Page<Product> mockProducts = new PageImpl<Product>(List.of(), pageable, 0);
+    Page<Product> mockProducts = new PageImpl<>(List.of(), pageable, 0);
     when(service.findProducts(any(), any(), any(), any())).thenReturn(mockProducts);
     when(pagedResourcesAssembler.toEmptyModel(any(), any())).thenReturn(PagedModel.empty());
     var result = productController.findProducts(TypeOption.ALL.getOption(), null, "en", pageable);
     assertEquals(HttpStatus.OK, result.getStatusCode());
     assertTrue(result.hasBody());
-    assertEquals(0, result.getBody().getContent().size());
+    assertEquals(0, Objects.requireNonNull(result.getBody()).getContent().size());
   }
 
   @Test
@@ -78,7 +86,7 @@ class ProductControllerTest {
     PageRequest pageable = PageRequest.of(0, 20, Sort.by(Order.by(SortOption.ALPHABETICALLY.getOption())));
     Product mockProduct = createProductMock();
 
-    Page<Product> mockProducts = new PageImpl<Product>(List.of(mockProduct), pageable, 1);
+    Page<Product> mockProducts = new PageImpl<>(List.of(mockProduct), pageable, 1);
     when(service.findProducts(any(), any(), any(), any())).thenReturn(mockProducts);
     assembler = new ProductModelAssembler();
     var mockProductModel = assembler.toModel(mockProduct);
@@ -87,7 +95,7 @@ class ProductControllerTest {
     var result = productController.findProducts(TypeOption.ALL.getOption(), "", "en", pageable);
     assertEquals(HttpStatus.OK, result.getStatusCode());
     assertTrue(result.hasBody());
-    assertEquals(1, result.getBody().getContent().size());
+    assertEquals(1, Objects.requireNonNull(result.getBody()).getContent().size());
     assertEquals(PRODUCT_NAME_SAMPLE,
         result.getBody().getContent().iterator().next().getNames().get(Language.EN.getValue()));
     assertEquals(PRODUCT_NAME_DE_SAMPLE,
@@ -95,11 +103,62 @@ class ProductControllerTest {
   }
 
   @Test
-  void testSyncProducts() {
-    var response = productController.syncProducts();
+  void testSyncProductsSuccess() {
+    when(service.syncLatestDataFromMarketRepo()).thenReturn(true);
+
+    var response = productController.syncProducts(AUTHORIZATION_HEADER, false);
+
     assertEquals(HttpStatus.OK, response.getStatusCode());
     assertTrue(response.hasBody());
-    assertEquals(ErrorCode.SUCCESSFUL.getCode(), response.getBody().getHelpCode());
+    assertEquals(ErrorCode.SUCCESSFUL.getCode(), Objects.requireNonNull(response.getBody()).getHelpCode());
+    assertEquals("Data is already up to date, nothing to sync", response.getBody().getMessageDetails());
+  }
+
+  @Test
+  void testSyncProductsWithResetSuccess() {
+    when(service.syncLatestDataFromMarketRepo()).thenReturn(false);
+
+    var response = productController.syncProducts(AUTHORIZATION_HEADER, true);
+
+    assertEquals(HttpStatus.OK, response.getStatusCode());
+    assertTrue(response.hasBody());
+    assertEquals(ErrorCode.SUCCESSFUL.getCode(), Objects.requireNonNull(response.getBody()).getHelpCode());
+    assertTrue(response.getBody().getMessageDetails().contains("Finished sync data"));
+  }
+
+  @Test
+  void testSyncProductsInvalidToken() {
+    doThrow(new UnauthorizedException(ErrorCode.GITHUB_USER_UNAUTHORIZED.getCode(),
+        ErrorCode.GITHUB_USER_UNAUTHORIZED.getHelpText())).when(gitHubService)
+        .validateUserOrganization(any(String.class), any(String.class));
+
+    UnauthorizedException exception = assertThrows(UnauthorizedException.class,
+        () -> productController.syncProducts(INVALID_AUTHORIZATION_HEADER, false));
+
+    assertEquals(ErrorCode.GITHUB_USER_UNAUTHORIZED.getHelpText(), exception.getMessage());
+  }
+
+  @Test
+  void testCreateCustomSortProductsSuccess() {
+    ProductCustomSortRequest mockProductCustomSortRequest = createProductCustomSortRequestMock();
+    var response = productController.createCustomSortProducts(AUTHORIZATION_HEADER, mockProductCustomSortRequest);
+
+    assertEquals(HttpStatus.OK, response.getStatusCode());
+    assertTrue(response.hasBody());
+    assertEquals(ErrorCode.SUCCESSFUL.getCode(), Objects.requireNonNull(response.getBody()).getHelpCode());
+    assertTrue(response.getBody().getMessageDetails().contains("Custom product sort order added successfully"));
+  }
+
+  @Test
+  void testGetBearerTokenWithValidHeader() {
+    String token = ProductController.getBearerToken(AUTHORIZATION_HEADER);
+    assertEquals("valid_token", token);
+  }
+
+  @Test
+  void testGetBearerTokenWithInvalidHeader() {
+    String token = ProductController.getBearerToken("InvalidTokenFormat");
+    assertNull(token);
   }
 
   private Product createProductMock() {
@@ -116,5 +175,12 @@ class ProductControllerTest {
     mockProduct.setType("connector");
     mockProduct.setTags(List.of("AI"));
     return mockProduct;
+  }
+
+  private ProductCustomSortRequest createProductCustomSortRequestMock() {
+    List<String> productIds = new ArrayList<>();
+    productIds.add("a-trust");
+    productIds.add("approval-decision-utils");
+    return new ProductCustomSortRequest(productIds, "recently");
   }
 }

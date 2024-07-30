@@ -1,14 +1,19 @@
 package com.axonivy.market.github.service;
 
-import com.axonivy.market.entity.User;
-import com.axonivy.market.model.GitHubAccessTokenResponse;
+import java.io.IOException;
+import java.util.List;
+
 import org.kohsuke.github.GHContent;
 import org.kohsuke.github.GHOrganization;
 import org.kohsuke.github.GHRepository;
 import org.kohsuke.github.GitHub;
 
-import java.io.IOException;
-import java.util.List;
+import com.axonivy.market.entity.User;
+import com.axonivy.market.exceptions.model.MissingHeaderException;
+import com.axonivy.market.exceptions.model.Oauth2ExchangeCodeException;
+import com.axonivy.market.exceptions.model.UnauthorizedException;
+import com.axonivy.market.github.model.GitHubAccessTokenResponse;
+import com.axonivy.market.github.model.GitHubProperty;
 
 public interface GitHubService {
 
@@ -22,7 +27,10 @@ public interface GitHubService {
 
   GHContent getGHContent(GHRepository ghRepository, String path, String ref) throws IOException;
 
-  GitHubAccessTokenResponse getAccessToken(String code, String clientId, String clientSecret);
+  GitHubAccessTokenResponse getAccessToken(String code, GitHubProperty gitHubProperty)
+      throws Oauth2ExchangeCodeException, MissingHeaderException;
 
   User getAndUpdateUser(String accessToken);
+
+  void validateUserOrganization(String accessToken, String organization) throws UnauthorizedException;
 }

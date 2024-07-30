@@ -24,16 +24,20 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import com.axonivy.market.constants.GitHubConstants;
 import com.axonivy.market.entity.User;
 import com.axonivy.market.enums.ErrorCode;
+import com.axonivy.market.exceptions.model.MissingHeaderException;
 import com.axonivy.market.exceptions.model.NotFoundException;
 import com.axonivy.market.exceptions.model.Oauth2ExchangeCodeException;
+import com.axonivy.market.exceptions.model.UnauthorizedException;
+import com.axonivy.market.github.model.GitHubAccessTokenResponse;
 import com.axonivy.market.github.model.GitHubProperty;
 import com.axonivy.market.github.service.GitHubService;
-import com.axonivy.market.model.GitHubAccessTokenResponse;
+import com.axonivy.market.github.util.GitHubUtils;
 import com.axonivy.market.repository.UserRepository;
 
 @Service
@@ -80,11 +84,14 @@ public class GitHubServiceImpl implements GitHubService {
   }
 
   @Override
-  public GitHubAccessTokenResponse getAccessToken(String code, String clientId, String clientSecret)
-      throws Oauth2ExchangeCodeException {
+  public GitHubAccessTokenResponse getAccessToken(String code, GitHubProperty gitHubProperty)
+      throws Oauth2ExchangeCodeException, MissingHeaderException {
+    if (gitHubProperty == null) {
+      throw new MissingHeaderException();
+    }
     MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
-    params.add(GitHubConstants.Json.CLIENT_ID, clientId);
-    params.add(GitHubConstants.Json.CLIENT_SECRET, clientSecret);
+    params.add(GitHubConstants.Json.CLIENT_ID, gitHubProperty.getOauth2ClientId());
+    params.add(GitHubConstants.Json.CLIENT_SECRET, gitHubProperty.getOauth2ClientSecret());
     params.add(GitHubConstants.Json.CODE, code);
 
     HttpHeaders headers = new HttpHeaders();
@@ -108,7 +115,7 @@ public class GitHubServiceImpl implements GitHubService {
     headers.setBearerAuth(accessToken);
     HttpEntity<String> entity = new HttpEntity<>(headers);
 
-    ResponseEntity<Map<String, Object>> response = restTemplate.exchange("https://api.github.com/user", HttpMethod.GET,
+    ResponseEntity<Map<String, Object>> response = restTemplate.exchange(GitHubConstants.Url.USER, HttpMethod.GET,
         entity, new ParameterizedTypeReference<>() {
         });
 
@@ -136,5 +143,34 @@ public class GitHubServiceImpl implements GitHubService {
     userRepository.save(user);
 
     return user;
+  }
+
+  @Override
+  public void validateUserOrganization(String accessToken, String organization) throws UnauthorizedException {
+    List<Map<String, Object>> userOrganizations = getUserOrganizations(accessToken);
+    for (var org : userOrganizations) {
+      if (org.get("login").equals(organization)) {
+        return;
+      }
+    }
+    throw new UnauthorizedException(ErrorCode.GITHUB_USER_UNAUTHORIZED.getCode(),
+        ErrorCode.GITHUB_USER_UNAUTHORIZED.getHelpText()
+            + "-User must be a member of the Axon Ivy Market Organization");
+  }
+
+  public List<Map<String, Object>> getUserOrganizations(String accessToken) throws UnauthorizedException {
+    HttpHeaders headers = new HttpHeaders();
+    headers.setBearerAuth(accessToken);
+    HttpEntity<String> entity = new HttpEntity<>(headers);
+    try {
+      ResponseEntity<List<Map<String, Object>>> response = restTemplate.exchange(GitHubConstants.Url.USER_ORGS,
+          HttpMethod.GET, entity, new ParameterizedTypeReference<>() {
+          });
+      return response.getBody();
+    } catch (HttpClientErrorException exception) {
+      throw new UnauthorizedException(ErrorCode.GITHUB_USER_UNAUTHORIZED.getCode(),
+          ErrorCode.GITHUB_USER_UNAUTHORIZED.getHelpText() + "-" + GitHubUtils.extractMessageFromExceptionMessage(
+              exception.getMessage()));
+    }
   }
 }
