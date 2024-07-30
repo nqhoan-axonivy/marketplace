@@ -5,25 +5,15 @@ import static com.axonivy.market.constants.CommonConstants.SLASH;
 import static com.axonivy.market.constants.MetaConstants.META_FILE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-
-import com.axonivy.market.entity.ProductCustomSort;
-import com.axonivy.market.enums.ErrorCode;
-import com.axonivy.market.model.ProductCustomSortRequest;
-import com.axonivy.market.repository.ProductCustomSortRepository;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,7 +28,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import com.axonivy.market.exceptions.model.InvalidParamException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -59,9 +48,9 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.axonivy.market.BaseSetup;
 import com.axonivy.market.constants.GitHubConstants;
 import com.axonivy.market.entity.GitHubRepoMeta;
 import com.axonivy.market.entity.Product;
@@ -80,10 +69,8 @@ import com.axonivy.market.repository.ProductRepository;
 import com.axonivy.market.service.impl.ProductServiceImpl;
 
 @ExtendWith(MockitoExtension.class)
-class ProductServiceImplTest {
+class ProductServiceImplTest extends BaseSetup {
 
-  private static final String SAMPLE_PRODUCT_ID = "amazon-comprehend";
-  private static final String SAMPLE_PRODUCT_NAME = "Amazon Comprehend";
   private static final long LAST_CHANGE_TIME = 1718096290000L;
   private static final Pageable PAGEABLE = PageRequest.of(0, 20,
       Sort.by(SortOption.ALPHABETICALLY.getOption()).descending());
@@ -92,9 +79,6 @@ class ProductServiceImplTest {
   private String keyword;
   private String langague;
   private Page<Product> mockResultReturn;
-
-  @Mock
-  private MongoTemplate mongoTemplate;
 
   @Mock
   private GHRepository ghRepository;
@@ -110,9 +94,6 @@ class ProductServiceImplTest {
 
   @Mock
   private GitHubService gitHubService;
-
-  @Mock
-  private ProductCustomSortRepository productCustomSortRepository;
 
   @Captor
   ArgumentCaptor<Product> argumentCaptor = ArgumentCaptor.forClass(Product.class);
@@ -178,13 +159,13 @@ class ProductServiceImplTest {
   void testFindProducts() {
     langague = "en";
     // Start testing by All
-    when(productRepository.findAll(any(Pageable.class))).thenReturn(mockResultReturn);
+    when(productRepository.findAllListed(any(Pageable.class))).thenReturn(mockResultReturn);
     // Executes
     var result = productService.findProducts(TypeOption.ALL.getOption(), keyword, langague, PAGEABLE);
     assertEquals(mockResultReturn, result);
 
     // Start testing by Connector
-    when(productRepository.findByType(any(), any(Pageable.class))).thenReturn(mockResultReturn);
+    when(productRepository.searchListedByCriteria(any(), any(Pageable.class))).thenReturn(mockResultReturn);
     // Executes
     result = productService.findProducts(TypeOption.CONNECTORS.getOption(), keyword, langague, PAGEABLE);
     assertEquals(mockResultReturn, result);
@@ -213,7 +194,7 @@ class ProductServiceImplTest {
 
     // Executes
     var result = productService.syncLatestDataFromMarketRepo();
-    assertFalse(result);
+    assertEquals(false, result);
 
     // Start testing by deleting new meta
     mockCommit = mockGHCommitHasSHA1(UUID.randomUUID().toString());
@@ -222,7 +203,7 @@ class ProductServiceImplTest {
     mockGithubFile.setStatus(FileStatus.REMOVED);
     // Executes
     result = productService.syncLatestDataFromMarketRepo();
-    assertFalse(result);
+    assertEquals(false, result);
   }
 
   @Test
@@ -244,7 +225,7 @@ class ProductServiceImplTest {
 
     // Executes
     var result = productService.syncLatestDataFromMarketRepo();
-    assertFalse(result);
+    assertEquals(false, result);
 
     // Start testing by deleting new logo
     when(mockCommit.getSHA1()).thenReturn(UUID.randomUUID().toString());
@@ -255,31 +236,31 @@ class ProductServiceImplTest {
 
     // Executes
     result = productService.syncLatestDataFromMarketRepo();
-    assertFalse(result);
+    assertEquals(false, result);
   }
 
   @Test
   void testFindAllProductsWithKeyword() throws IOException {
     langague = "en";
-    when(productRepository.findAll(any(Pageable.class))).thenReturn(mockResultReturn);
+    when(productRepository.findAllListed(any(Pageable.class))).thenReturn(mockResultReturn);
     // Executes
     var result = productService.findProducts(TypeOption.ALL.getOption(), keyword, langague, PAGEABLE);
     assertEquals(mockResultReturn, result);
-    verify(productRepository).findAll(any(Pageable.class));
+    verify(productRepository).findAllListed(any(Pageable.class));
 
     // Test has keyword
-    when(productRepository.searchByNameOrShortDescriptionRegex(any(), any(), any(Pageable.class)))
+    when(productRepository.searchListedByCriteria(any(), any(Pageable.class)))
         .thenReturn(new PageImpl<>(mockResultReturn.stream()
             .filter(product -> product.getNames().get(Language.EN.getValue()).equals(SAMPLE_PRODUCT_NAME))
             .collect(Collectors.toList())));
     // Executes
     result = productService.findProducts(TypeOption.ALL.getOption(), SAMPLE_PRODUCT_NAME, langague, PAGEABLE);
-    verify(productRepository).findAll(any(Pageable.class));
+    verify(productRepository).findAllListed(any(Pageable.class));
     assertTrue(result.hasContent());
     assertEquals(SAMPLE_PRODUCT_NAME, result.getContent().get(0).getNames().get(Language.EN.getValue()));
 
     // Test has keyword and type is connector
-    when(productRepository.searchByKeywordAndType(any(), any(), any(), any(Pageable.class)))
+    when(productRepository.searchListedByCriteria(any(), any(Pageable.class)))
         .thenReturn(new PageImpl<>(mockResultReturn.stream()
             .filter(product -> product.getNames().get(Language.EN.getValue()).equals(SAMPLE_PRODUCT_NAME)
                 && product.getType().equals(TypeOption.CONNECTORS.getCode()))
@@ -328,7 +309,7 @@ class ProductServiceImplTest {
   }
 
   @Test
-  void testNothingToSync() {
+  void testNothingToSync() throws IOException {
     var gitHubRepoMeta = mock(GitHubRepoMeta.class);
     when(gitHubRepoMeta.getLastSHA1()).thenReturn(SHA1_SAMPLE);
     var mockCommit = mockGHCommitHasSHA1(SHA1_SAMPLE);
@@ -337,7 +318,7 @@ class ProductServiceImplTest {
 
     // Executes
     var result = productService.syncLatestDataFromMarketRepo();
-    assertTrue(result);
+    assertEquals(true, result);
   }
 
   @Test
@@ -346,12 +327,12 @@ class ProductServiceImplTest {
     String type = TypeOption.ALL.getOption();
     keyword = "on";
     langague = "en";
-    when(productRepository.searchByNameOrShortDescriptionRegex(keyword, langague, simplePageable)).thenReturn(
+    when(productRepository.searchListedByCriteria(any(), any(Pageable.class))).thenReturn(
         mockResultReturn);
 
     var result = productService.findProducts(type, keyword, langague, simplePageable);
     assertEquals(result, mockResultReturn);
-    verify(productRepository).searchByNameOrShortDescriptionRegex(keyword, langague, simplePageable);
+    verify(productRepository).searchListedByCriteria(any(), any(Pageable.class));
   }
 
   @Test
@@ -376,97 +357,6 @@ class ProductServiceImplTest {
 
     result = productService.getCompatibilityFromOldestTag("11.2");
     assertEquals("11.2+", result);
-  }
-
-  @Test
-  void testRemoveFieldFromAllProductDocuments() {
-    productService.removeFieldFromAllProductDocuments("customOrder");
-
-    verify(mongoTemplate, times(1)).updateMulti(any(Query.class), any(Update.class), eq(Product.class));
-  }
-
-  @Test
-  void testRefineOrderedListOfProductsInCustomSort() throws InvalidParamException {
-    // prepare
-    List<String> orderedListOfProducts = List.of(SAMPLE_PRODUCT_ID);
-    Product mockProduct = new Product();
-    mockProduct.setId(SAMPLE_PRODUCT_ID);
-    when(productRepository.findById(SAMPLE_PRODUCT_ID)).thenReturn(Optional.of(mockProduct));
-
-    List<Product> refinedProducts = productService.refineOrderedListOfProductsInCustomSort(orderedListOfProducts);
-
-    assertEquals(1, refinedProducts.size());
-    assertEquals(1, refinedProducts.get(0).getCustomOrder());
-    verify(productRepository, times(1)).findById(SAMPLE_PRODUCT_ID);
-  }
-
-  @Test
-  void testRefineOrderedListOfProductsInCustomSort_ProductNotFound() {
-    List<String> orderedListOfProducts = List.of(SAMPLE_PRODUCT_ID);
-    when(productRepository.findById(SAMPLE_PRODUCT_ID)).thenReturn(Optional.empty());
-
-    InvalidParamException exception = assertThrows(InvalidParamException.class, () ->
-        productService.refineOrderedListOfProductsInCustomSort(orderedListOfProducts));
-    assertEquals(ErrorCode.PRODUCT_NOT_FOUND.getCode(), exception.getCode());
-  }
-
-  @Test
-  void testAddCustomSortProduct() throws InvalidParamException {
-    List<String> orderedListOfProducts = List.of(SAMPLE_PRODUCT_ID);
-    ProductCustomSortRequest customSortRequest = new ProductCustomSortRequest();
-    customSortRequest.setOrderedListOfProducts(orderedListOfProducts);
-    customSortRequest.setRuleForRemainder(SortOption.ALPHABETICALLY.getOption());
-
-    Product mockProduct = new Product();
-    mockProduct.setId(SAMPLE_PRODUCT_ID);
-    when(productRepository.findById(SAMPLE_PRODUCT_ID)).thenReturn(Optional.of(mockProduct));
-
-    productService.addCustomSortProduct(customSortRequest);
-
-    verify(productCustomSortRepository, times(1)).deleteAll();
-    verify(mongoTemplate, times(1)).updateMulti(any(Query.class), any(Update.class), eq(Product.class));
-    verify(productCustomSortRepository, times(1)).save(any(ProductCustomSort.class));
-    verify(productRepository, times(1)).saveAll(productListArgumentCaptor.capture());
-
-    List<Product> capturedProducts = productListArgumentCaptor.getValue();
-    assertEquals(1, capturedProducts.size());
-    assertEquals(1, capturedProducts.get(0).getCustomOrder());
-  }
-
-  @Test
-  void testCreateOrder() {
-    Sort.Order order = productService.createOrder(SortOption.ALPHABETICALLY, "en");
-
-    assertEquals(Sort.Direction.ASC, order.getDirection());
-    assertEquals(SortOption.ALPHABETICALLY.getCode("en"), order.getProperty());
-  }
-
-  @Test
-  void testClearAllProducts() {
-    productService.clearAllProducts();
-
-    verify(repoMetaRepository).deleteAll();
-    verify(productRepository).deleteAll();
-  }
-
-  private Page<Product> createPageProductsMock() {
-    var mockProducts = new ArrayList<Product>();
-    Map<String, String> name = new HashMap<>();
-    Product mockProduct = new Product();
-    mockProduct.setId(SAMPLE_PRODUCT_ID);
-    name.put(Language.EN.getValue(), SAMPLE_PRODUCT_NAME);
-    mockProduct.setNames(name);
-    mockProduct.setType("connector");
-    mockProducts.add(mockProduct);
-
-    mockProduct = new Product();
-    mockProduct.setId("tel-search-ch-connector");
-    name = new HashMap<>();
-    name.put(Language.EN.getValue(), "Swiss phone directory");
-    mockProduct.setNames(name);
-    mockProduct.setType("util");
-    mockProducts.add(mockProduct);
-    return new PageImpl<>(mockProducts);
   }
 
   private void mockMarketRepoMetaStatus() {
